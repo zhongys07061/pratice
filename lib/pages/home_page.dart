@@ -19,8 +19,6 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final StorageService _storage = StorageService.instance;
 
-  final int _defaultRandomCount = 30; // 随机抽题默认数量
-
   /// 全部有效题目 = 内置题库（过滤已删除） + 导入题库
   List<Question> get _bank => _storage.effectiveBank();
 
@@ -93,30 +91,34 @@ class _HomePageState extends State<HomePage> {
       _showSnack('没有可练习的题目');
       return;
     }
-    final total = bank.length;
-    final result = await showDialog<(int, String)>(
+    final choicePool = bank.where((q) => q.isChoice).toList();
+    final judgePool = bank.where((q) => !q.isChoice).toList();
+
+    final result = await showDialog<(int, int)>(
       context: context,
       builder: (ctx) => _RandomConfigDialog(
-        total: total,
-        initial: _defaultRandomCount < total ? _defaultRandomCount : total,
+        choiceTotal: choicePool.length,
+        judgeTotal: judgePool.length,
       ),
     );
     if (result == null || !mounted) return;
-    final (count, type) = result;
-
-    var pool = bank;
-    if (type == 'choice') {
-      pool = bank.where((q) => q.isChoice).toList();
-    } else if (type == 'judge') {
-      pool = bank.where((q) => !q.isChoice).toList();
-    }
-    if (pool.isEmpty) {
-      _showSnack('没有该题型的题目');
+    final (choiceCount, judgeCount) = result;
+    if (choiceCount + judgeCount == 0) {
+      _showSnack('请至少选择 1 道题');
       return;
     }
-    final n = count < pool.length ? count : pool.length;
-    final shuffled = List.of(pool)..shuffle();
-    _openQuiz(shuffled.take(n).toList(), '随机抽题');
+
+    final picked = <Question>[];
+    if (choiceCount > 0) {
+      final c = List.of(choicePool)..shuffle();
+      picked.addAll(c.take(choiceCount));
+    }
+    if (judgeCount > 0) {
+      final j = List.of(judgePool)..shuffle();
+      picked.addAll(j.take(judgeCount));
+    }
+    picked.shuffle();
+    _openQuiz(picked, '随机抽题');
   }
 
   @override
@@ -205,7 +207,7 @@ class _HomePageState extends State<HomePage> {
                   icon: Icons.shuffle,
                   color: const Color(0xFF7C3AED),
                   title: '随机抽题',
-                  subtitle: '自定义数量，随机打乱顺序',
+                  subtitle: '自定义数量与题型比例，随机打乱顺序',
                   onTap: _startRandom,
                 ),
                 _ModeCard(
@@ -225,7 +227,7 @@ class _HomePageState extends State<HomePage> {
                   color: const Color(0xFF10B981),
                   title: '导入题库',
                   subtitle: _storage.importedQuestions.isEmpty
-                      ? '从 txt 文件导入题目'
+                      ? '扫描/批量导入 txt、docx、pdf'
                       : '已导入 ${_storage.importedQuestions.length} 道题',
                   onTap: _openImport,
                 ),
@@ -426,70 +428,70 @@ class _ModeCard extends StatelessWidget {
   }
 }
 
-/// 随机抽题配置对话框：题型 + 数量
+/// 随机抽题配置对话框：分别设置选择题与判断题数量（任意比例混合）。
 class _RandomConfigDialog extends StatefulWidget {
-  final int total;
-  final int initial;
-  const _RandomConfigDialog({required this.total, required this.initial});
+  final int choiceTotal;
+  final int judgeTotal;
+  const _RandomConfigDialog({
+    required this.choiceTotal,
+    required this.judgeTotal,
+  });
 
   @override
   State<_RandomConfigDialog> createState() => _RandomConfigDialogState();
 }
 
 class _RandomConfigDialogState extends State<_RandomConfigDialog> {
-  late int _count = widget.initial;
-  String _type = 'all'; // all / choice / judge
+  late int _choiceCount;
+  late int _judgeCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _choiceCount = widget.choiceTotal >= 15 ? 15 : widget.choiceTotal;
+    _judgeCount = widget.judgeTotal >= 15 ? 15 : widget.judgeTotal;
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final total = _choiceCount + _judgeCount;
     return AlertDialog(
       title: const Text('随机抽题'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'all', label: Text('全部')),
-              ButtonSegment(value: 'choice', label: Text('选择题')),
-              ButtonSegment(value: 'judge', label: Text('判断题')),
-            ],
-            selected: {_type},
-            onSelectionChanged: (s) => setState(() => _type = s.first),
-          ),
-          const SizedBox(height: 20),
-          Text('从 ${widget.total} 道题中随机抽取'),
-          const SizedBox(height: 8),
-          Text(
-            '$_count 道',
-            style: theme.textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.primary,
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('选择题（共 ${widget.choiceTotal} 道）',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            _countSlider(
+              value: _choiceCount,
+              max: widget.choiceTotal,
+              color: Colors.blue,
+              onChanged: (v) => setState(() => _choiceCount = v),
             ),
-          ),
-          Slider(
-            value: _count.toDouble(),
-            min: 1,
-            max: widget.total.toDouble(),
-            divisions: widget.total > 1 ? widget.total - 1 : null,
-            label: '$_count',
-            onChanged: (v) => setState(() => _count = v.round()),
-          ),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              TextButton(
-                onPressed: () => setState(() => _count = 1),
-                child: const Text('最少'),
+            const SizedBox(height: 16),
+            Text('判断题（共 ${widget.judgeTotal} 道）',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            _countSlider(
+              value: _judgeCount,
+              max: widget.judgeTotal,
+              color: Colors.teal,
+              onChanged: (v) => setState(() => _judgeCount = v),
+            ),
+            const SizedBox(height: 20),
+            Center(
+              child: Text(
+                '共 $total 道题',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.primary,
+                ),
               ),
-              TextButton(
-                onPressed: () => setState(() => _count = widget.total),
-                child: const Text('全部'),
-              ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -497,8 +499,38 @@ class _RandomConfigDialogState extends State<_RandomConfigDialog> {
           child: const Text('取消'),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop((_count, _type)),
+          onPressed: total == 0
+              ? null
+              : () => Navigator.of(context).pop((_choiceCount, _judgeCount)),
           child: const Text('开始'),
+        ),
+      ],
+    );
+  }
+
+  Widget _countSlider({
+    required int value,
+    required int max,
+    required Color color,
+    required ValueChanged<int> onChanged,
+  }) {
+    final enabled = max > 0;
+    return Row(
+      children: [
+        Expanded(
+          child: Slider(
+            value: value.toDouble(),
+            min: 0,
+            max: enabled ? max.toDouble() : 1,
+            divisions: enabled ? max : 1,
+            label: '$value',
+            activeColor: color,
+            onChanged: enabled ? (v) => onChanged(v.round()) : null,
+          ),
+        ),
+        SizedBox(
+          width: 36,
+          child: Text('$value', textAlign: TextAlign.center),
         ),
       ],
     );

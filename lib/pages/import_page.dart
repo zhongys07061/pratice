@@ -21,16 +21,27 @@ class _ImportPageState extends State<ImportPage> {
   List<Question>? _questions;
   final TextEditingController _pasteController = TextEditingController();
 
-  Future<void> _pickFile() async {
-    final file = await FilePicker.pickFile(
+  Future<void> _pickFiles() async {
+    final files = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['txt', 'text', 'csv', 'docx', 'pdf'],
     );
-    if (file == null) return;
+    if (files.isEmpty) return;
 
-    final bytes = await file.readAsBytes();
-    final content = ImportParser.extractText(file.name, bytes);
-    _applyResult(file.name, ImportParser.parse(content, _nextStartId()));
+    final all = <Question>[];
+    final names = <String>[];
+    var startId = _nextStartId();
+    for (final file in files) {
+      final bytes = await file.readAsBytes();
+      final content = ImportParser.extractText(file.name, bytes);
+      final parsed = ImportParser.parse(content, startId);
+      if (parsed.isNotEmpty) {
+        all.addAll(parsed);
+        names.add('${file.name}（${parsed.length} 题）');
+        startId = all.map((q) => q.id).reduce((a, b) => a > b ? a : b) + 1;
+      }
+    }
+    _applyResult(names.join('\n'), all);
   }
 
   void _parsePaste() {
@@ -89,7 +100,7 @@ class _ImportPageState extends State<ImportPage> {
         children: [
           SegmentedButton<String>(
             segments: const [
-              ButtonSegment(value: 'file', label: Text('文件导入')),
+              ButtonSegment(value: 'file', label: Text('扫描文档')),
               ButtonSegment(value: 'paste', label: Text('粘贴文本')),
             ],
             selected: {_mode},
@@ -102,9 +113,9 @@ class _ImportPageState extends State<ImportPage> {
             SizedBox(
               height: 52,
               child: FilledButton.icon(
-                icon: const Icon(Icons.upload_file),
-                label: const Text('选择文件（txt / docx / pdf）'),
-                onPressed: _pickFile,
+                icon: const Icon(Icons.folder_open),
+                label: const Text('扫描 / 批量选择文档（可多选）'),
+                onPressed: _pickFiles,
               ),
             ),
           ] else ...[
@@ -153,7 +164,7 @@ class _ImportPageState extends State<ImportPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('支持文件：txt、docx、pdf，或直接粘贴文本',
+          const Text('支持文件：txt、docx、pdf，可一次多选批量导入；也可直接粘贴文本',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
           const SizedBox(height: 10),
           const Text('两种题目格式都能识别：', style: TextStyle(fontSize: 13)),
