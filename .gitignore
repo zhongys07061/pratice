@@ -49,5 +49,8 @@ app.*.map.json
 # Build log artifacts
 build_log.txt
 
+# Local screenshots
+github_screenshot*.png
+
 # Exceptions to above rules.
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
