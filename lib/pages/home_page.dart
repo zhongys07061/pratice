@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../models/question.dart';
+import '../services/import_parser.dart';
+import '../services/native_service.dart';
 import '../services/storage_service.dart';
 import 'import_page.dart';
 import 'question_bank_page.dart';
@@ -21,6 +23,41 @@ class _HomePageState extends State<HomePage> {
 
   /// 全部有效题目 = 内置题库（过滤已删除） + 导入题库
   List<Question> get _bank => _storage.effectiveBank();
+
+  @override
+  void initState() {
+    super.initState();
+    _initSharedFile();
+  }
+
+  Future<void> _initSharedFile() async {
+    NativeService.instance.setSharedFileListener((file) async {
+      final n = await _importSharedFile(file);
+      if (!mounted) return;
+      setState(() {});
+      _showSnack(n > 0 ? '已从外部文档导入 $n 道题' : '未能从该文档解析出题目');
+    });
+    final file = await NativeService.instance.takeSharedFile();
+    if (file == null) return;
+    final n = await _importSharedFile(file);
+    if (!mounted) return;
+    setState(() {});
+    _showSnack(n > 0 ? '已从外部文档导入 $n 道题' : '未能从该文档解析出题目');
+  }
+
+  Future<int> _importSharedFile(SharedFile file) async {
+    final content = ImportParser.extractText(file.name, file.bytes);
+    final questions = ImportParser.parse(content, _nextImportId());
+    if (questions.isEmpty) return 0;
+    await _storage.addImportedQuestions(questions);
+    return questions.length;
+  }
+
+  int _nextImportId() {
+    final imported = _storage.importedQuestions;
+    if (imported.isEmpty) return 100000;
+    return imported.map((q) => q.id).reduce((a, b) => a > b ? a : b) + 1;
+  }
 
   Future<void> _openQuiz(
     List<Question> questions,

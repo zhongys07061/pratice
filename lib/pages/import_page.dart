@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../models/question.dart';
 import '../services/import_parser.dart';
+import '../services/native_service.dart';
 import '../services/storage_service.dart';
 
 /// 题库导入页：文件导入（txt/docx/pdf）或粘贴文本（聊天记录等）。
@@ -42,6 +45,72 @@ class _ImportPageState extends State<ImportPage> {
       }
     }
     _applyResult(names.join('\n'), all);
+  }
+
+  /// 扫描手机公共目录（下载/文档等）里的题库文件，勾选后批量导入。
+  Future<void> _scanPublicDir() async {
+    if (!await NativeService.instance.hasAllFilesAccess()) {
+      await NativeService.instance.requestAllFilesAccess();
+      if (!mounted) return;
+      _show('请在设置中授予「所有文件访问」权限，返回后再点一次');
+      return;
+    }
+    final files = _scanDirs();
+    if (files.isEmpty) {
+      _show('未在下载/文档目录找到支持的文件（txt/docx/pdf）');
+      return;
+    }
+    if (!mounted) return;
+    final selected = await showModalBottomSheet<Set<String>>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => _ScanSheet(files: files),
+    );
+    if (selected == null || selected.isEmpty || !mounted) return;
+
+    final all = <Question>[];
+    final names = <String>[];
+    var startId = _nextStartId();
+    for (final f in files) {
+      if (!selected.contains(f.path)) continue;
+      final bytes = await f.readAsBytes();
+      final name = f.path.split(RegExp(r'[/\\]')).last;
+      final parsed =
+          ImportParser.parse(ImportParser.extractText(name, bytes), startId);
+      if (parsed.isNotEmpty) {
+        all.addAll(parsed);
+        names.add('$name（${parsed.length} 题）');
+        startId = all.map((q) => q.id).reduce((a, b) => a > b ? a : b) + 1;
+      }
+    }
+    _applyResult(names.join('\n'), all);
+  }
+
+  List<File> _scanDirs() {
+    const roots = [
+      '/storage/emulated/0/Download',
+      '/storage/emulated/0/Documents',
+      '/storage/emulated/0/Download/WeiXin',
+    ];
+    const exts = {'txt', 'docx', 'pdf', 'csv'};
+    final found = <File>[];
+    final seen = <String>{};
+    for (final root in roots) {
+      final dir = Directory(root);
+      if (!dir.existsSync()) continue;
+      try {
+        for (final e in dir.listSync()) {
+          if (e is File) {
+            final ext = e.path.split('.').last.toLowerCase();
+            if (exts.contains(ext) && seen.add(e.path)) found.add(e);
+          }
+        }
+      } catch (_) {}
+    }
+    return found;
   }
 
   void _parsePaste() {
@@ -116,6 +185,15 @@ class _ImportPageState extends State<ImportPage> {
                 icon: const Icon(Icons.folder_open),
                 label: const Text('扫描 / 批量选择文档（可多选）'),
                 onPressed: _pickFiles,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 52,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.folder_special),
+                label: const Text('扫描手机目录（下载/文档，需授权）'),
+                onPressed: _scanPublicDir,
               ),
             ),
           ] else ...[
@@ -221,6 +299,87 @@ class _ImportPageState extends State<ImportPage> {
       ),
       child: Text(text,
           style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
+    );
+  }
+}
+
+/// 扫描结果选择面板：勾选要导入的文件。
+class _ScanSheet extends StatefulWidget {
+  final List<File> files;
+  const _ScanSheet({required this.files});
+
+  @override
+  State<_ScanSheet> createState() => _ScanSheetState();
+}
+
+class _ScanSheetState extends State<_ScanSheet> {
+  late final Set<String> _selected = widget.files.map((f) => f.path).toSet();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
+            child: Row(
+              children: [
+                Text('找到 ${widget.files.length} 个文档',
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold)),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => setState(() {
+                    if (_selected.length == widget.files.length) {
+                      _selected.clear();
+                    } else {
+                      _selected
+                        ..clear()
+                        ..addAll(widget.files.map((f) => f.path));
+                    }
+                  }),
+                  child: const Text('全选'),
+                ),
+              ],
+            ),
+          ),
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: widget.files.length,
+              itemBuilder: (context, i) {
+                final f = widget.files[i];
+                final name = f.path.split(RegExp(r'[/\\]')).last;
+                return CheckboxListTile(
+                  value: _selected.contains(f.path),
+                  title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  onChanged: (v) => setState(() {
+                    if (v == true) {
+                      _selected.add(f.path);
+                    } else {
+                      _selected.remove(f.path);
+                    }
+                  }),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: _selected.isEmpty
+                    ? null
+                    : () => Navigator.of(context).pop(_selected),
+                child: Text('导入选中 ${_selected.length} 个文件'),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
